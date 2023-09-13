@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from bot.base.context import BotContext
 from module.umamusume.task import UmamusumeTask, UmamusumeTaskType
 from module.umamusume.define import *

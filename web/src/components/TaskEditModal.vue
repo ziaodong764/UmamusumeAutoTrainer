@@ -286,6 +286,7 @@ export default {
         {id:18, name:'哪怕还未长大'},
         {id:19, name:'必杀技！双胡萝卜拳'},
         {id:20, name:'欢迎来到特雷森学园！'},
+        {id:21, name:'要受人喜爱啊'},
       ],
       umamusumeRaceList_1:[
         {id:1401, name:'函馆初级锦标赛',date: '7月后', type: 'g3'},

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import subprocess
 from subprocess import Popen
 from typing import Any
