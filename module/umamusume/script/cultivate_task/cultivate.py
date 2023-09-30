@@ -7,7 +7,7 @@ from bot.base.task import TaskStatus, EndTaskReason
 from module.umamusume.asset.point import *
 from module.umamusume.context import TurnInfo
 from module.umamusume.script.cultivate_task.const import SKILL_LEARN_PRIORITY_LIST
-from module.umamusume.script.cultivate_task.event import get_event_choice
+from module.umamusume.script.cultivate_task.event.manifest import get_event_choice
 from module.umamusume.script.cultivate_task.parse import *
 
 log = logger.get_logger(__name__)
@@ -48,7 +48,7 @@ def script_cultivate_main_menu(ctx: UmamusumeContext):
         ctx.cultivate_detail.reset_skill_learn()
 
     if not ctx.cultivate_detail.turn_info.parse_train_info_finish:
-        if has_extra_race or ctx.cultivate_detail.turn_info.remain_stamina < 40:
+        if has_extra_race or ctx.cultivate_detail.turn_info.remain_stamina < 48:
             ctx.cultivate_detail.turn_info.parse_train_info_finish = True
             return
         else:
@@ -181,8 +181,15 @@ def script_cultivate_event(ctx: UmamusumeContext):
     img = ctx.ctrl.get_screen()
     event_name, selector_list = parse_cultivate_event(ctx, img)
     log.debug("当前事件：%s", event_name)
-    if len(selector_list) != 0:
-        choice_index = get_event_choice(event_name)
+    if len(selector_list) != 0 and len(selector_list) != 1:
+        time.sleep(0.5)
+        # 避免出现选项残缺的情况，这里重新解析一次
+        img = ctx.ctrl.get_screen()
+        event_name, selector_list = parse_cultivate_event(ctx, img)
+        choice_index = get_event_choice(ctx, event_name)
+        # 意外情况容错
+        if choice_index - 1 > len(selector_list):
+            choice_index = 1
         ctx.ctrl.click(selector_list[choice_index - 1][0], selector_list[choice_index - 1][1],
                        "事件选项-" + str(choice_index))
     else:
@@ -342,32 +349,65 @@ def script_cultivate_learn_skill(ctx: UmamusumeContext):
             return
         else:
             learn_skill_list = [ctx.cultivate_detail.learn_skill_list]
-    for i in range(len(learn_skill_list)):
-        log.debug("目标技能列表：%s, 优先级：%s", str(learn_skill_list[i]), str(i))
-        while True:
-            img = ctx.ctrl.get_screen()
-            find_skill(ctx, img, learn_skill_list[i], learn_any_skill=False)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            if not compare_color_equal(img[1006, 701], [211, 209, 219]):
-                break
-            ctx.ctrl.swipe(x1=23, y1=1000, x2=23, y2=660, duration=1000, name="")
-            time.sleep(1)
-        while True:
-            ctx.ctrl.swipe(x1=23, y1=620, x2=23, y2=1000, duration=100, name="")
-            img = cv2.cvtColor(ctx.ctrl.get_screen(), cv2.COLOR_BGR2RGB)
-            if not compare_color_equal(img[488, 701], [211, 209, 219]):
-                time.sleep(1.5)
-                break
+
+    #遍历整页, 找出所有可点的技能
+    skill_list = []
+    while True:
+        img = ctx.ctrl.get_screen()
+        l = get_skill_list(img,learn_skill_list)
+        #避免重复统计(会出现在页末翻页不完全的情况)
+        for i in l:
+            if i not in skill_list:
+                skill_list.append(i)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if not compare_color_equal(img[1006, 701], [211, 209, 219]):
+            break
+        ctx.ctrl.swipe(x1=23, y1=1000, x2=23, y2=636, duration=1000, name="")
+        time.sleep(1)
+
+    #将金色技能和其后面的技能绑定
+    #TODO: 如果金色技能的下位技能在极端情况下被先点掉, 可能会导致技能绑定错误
+    for i in range(len(skill_list)):
+        if i != (len(skill_list)-1) and skill_list[i]["is_gold"] == True:
+            skill_list[i]["subsequent_skill"] = skill_list[i+1]["skill_name"]
+
+    #按照优先级排列
+    skill_list = sorted(skill_list,key = lambda x: x["priority"])
+    #TODO: 暂时没办法处理一个技能可以点多次的情况
+    total_skill_point = int(re.sub("\\D", "", ocr_line(img[400: 440, 490: 665])))
+    target_skill_list = []
+    curr_point = 0
+    for i in range(len(learn_skill_list)+1):
+        if i > 0 and ctx.cultivate_detail.learn_skill_only_user_provided == True and not ctx.cultivate_detail.cultivate_finish:
+            break
+        for j in range(len(skill_list)):
+            if skill_list[j]["priority"] != i or skill_list[j]["is_available"] == False:
+                continue
+            if curr_point + skill_list[j]["skill_cost"] <= total_skill_point:
+                curr_point += skill_list[j]["skill_cost"]
+                target_skill_list.append(skill_list[j]["skill_name"])
+                #如果点的是金色技能, 就将其绑定的下位技能设置为不可点
+                if skill_list[j]["is_gold"] == True and skill_list[j]["subsequent_skill"] != '':
+                    for k in range(len(skill_list)):
+                        if skill_list[k]["skill_name"] == skill_list[j]["subsequent_skill"]:
+                            skill_list[k]["is_available"] = False
+
+    #向上移动至对齐
+    ctx.ctrl.swipe(x1=23, y1=950, x2=23, y2=968, duration=100, name="")
     time.sleep(1)
-    if ctx.cultivate_detail.cultivate_finish or not ctx.cultivate_detail.learn_skill_only_user_provided:
-        while True:
-            img = ctx.ctrl.get_screen()
-            find_skill(ctx, img, [], learn_any_skill=True)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            if not compare_color_equal(img[1006, 701], [211, 209, 219]):
-                break
-            ctx.ctrl.swipe(x1=23, y1=1000, x2=23, y2=640, duration=1000, name="")
-            time.sleep(1)
+
+    #点技能
+    while True:
+        img = ctx.ctrl.get_screen()
+        find_skill(ctx, img, target_skill_list, learn_any_skill=False)
+        if target_skill_list == []:
+            break
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if not compare_color_equal(img[488, 701], [211, 209, 219]):
+            break
+        ctx.ctrl.swipe(x1=23, y1=636, x2=23, y2=1000, duration=1000, name="")
+        time.sleep(1)
+
     ctx.cultivate_detail.learn_skill_done = True
     ctx.cultivate_detail.turn_info.turn_learn_skill_done = True
 
@@ -388,6 +428,7 @@ def script_factor_receive(ctx: UmamusumeContext):
     if ctx.cultivate_detail.parse_factor_done:
         ctx.ctrl.click_by_point(CULTIVATE_FACTOR_RECEIVE_CONFIRM)
     else:
+        time.sleep(2)
         parse_factor(ctx)
 
 
